@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis-dhch
+    ports:
+      - "6381:6381"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      retries: 30
+
+  backend:
+    build: .
+    container_name: dhcd-backend
+    ports:
+      - "8082:8082"
+    env_file:
+      - .env.prod
+    environment:
+      - REDIS_HOST=redis-dhch
+      - NODE_ENV=production
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped

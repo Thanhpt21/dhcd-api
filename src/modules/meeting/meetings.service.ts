@@ -1,0 +1,401 @@
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { PrismaService } from 'prisma/prisma.service';
+import { CreateMeetingDto } from './dto/create-meeting.dto';
+import { UpdateMeetingDto } from './dto/update-meeting.dto';
+import { MeetingResponseDto } from './dto/meeting-response.dto';
+import { Prisma } from '@prisma/client';
+import { Cron, CronExpression } from '@nestjs/schedule';
+
+@Injectable()
+export class MeetingsService {
+  constructor(private prisma: PrismaService) {}
+
+  async createMeeting(dto: CreateMeetingDto) {
+    // Check if meeting code already exists
+    const existing = await this.prisma.meeting.findUnique({ 
+      where: { meetingCode: dto.meetingCode } 
+    });
+    if (existing) throw new BadRequestException('Mã cuộc họp đã tồn tại');
+
+    // Check if createdBy user exists
+    const user = await this.prisma.user.findUnique({ where: { id: dto.createdBy } });
+    if (!user) throw new BadRequestException('Người tạo không tồn tại');
+
+    const meeting = await this.prisma.meeting.create({ 
+      data: {
+        ...dto,
+        totalShares: dto.totalShares || 0,
+        totalShareholders: dto.totalShareholders || 0,
+        status: dto.status || 'DRAFT'
+      }
+    });
+
+    return {
+      success: true,
+      message: 'Tạo cuộc họp thành công',
+      data: new MeetingResponseDto(meeting),
+    };
+  }
+
+  async getMeetings(page = 1, limit = 10, search = '', status = '') {
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.MeetingWhereInput = {};
+    
+    if (search) {
+      where.OR = [
+        { meetingCode: { contains: search, mode: 'insensitive' as Prisma.QueryMode } },
+        { meetingName: { contains: search, mode: 'insensitive' as Prisma.QueryMode } },
+      ];
+    }
+
+    if (status) {
+      where.status = status;
+    }
+
+    const [meetings, total] = await this.prisma.$transaction([
+      this.prisma.meeting.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { meetingDate: 'desc' },
+        include: {
+          createdByUser: {
+            select: { id: true, name: true, email: true }
+          }
+        }
+      }),
+      this.prisma.meeting.count({ where }),
+    ]);
+
+    return {
+      success: true,
+      message: 'Lấy danh sách cuộc họp thành công',
+      data: {
+        data: meetings.map((m) => ({
+          ...new MeetingResponseDto(m),
+          createdByUser: m.createdByUser
+        })),
+        total,
+        page,
+        pageCount: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async getAllMeetings(search = '', status = '') {
+    const where: Prisma.MeetingWhereInput = {};
+    
+    if (search) {
+      where.OR = [
+        { meetingCode: { contains: search, mode: 'insensitive' as Prisma.QueryMode } },
+        { meetingName: { contains: search, mode: 'insensitive' as Prisma.QueryMode } },
+      ];
+    }
+
+    if (status) {
+      where.status = status;
+    }
+
+    const meetings = await this.prisma.meeting.findMany({
+      where,
+      orderBy: { meetingDate: 'desc' },
+      include: {
+        createdByUser: {
+          select: { id: true, name: true, email: true }
+        }
+      }
+    });
+
+    return {
+      success: true,
+      message: 'Lấy tất cả cuộc họp thành công',
+      data: meetings.map((m) => ({
+        ...new MeetingResponseDto(m),
+        createdByUser: m.createdByUser
+      })),
+    };
+  }
+
+  async getMeetingById(id: number) {
+    const meeting = await this.prisma.meeting.findUnique({ 
+      where: { id },
+      include: {
+        createdByUser: {
+          select: { id: true, name: true, email: true }
+        },
+        resolutions: true,
+        registrations: {
+          include: {
+            shareholder: true
+          }
+        },
+        documents: true,
+        agendas: true
+      }
+    });
+    
+    if (!meeting) throw new NotFoundException('Cuộc họp không tồn tại');
+    
+    return {
+      success: true,
+      message: 'Lấy thông tin cuộc họp thành công',
+      data: {
+        ...new MeetingResponseDto(meeting),
+        createdByUser: meeting.createdByUser,
+        resolutions: meeting.resolutions,
+        registrations: meeting.registrations,
+        documents: meeting.documents,
+        agendas: meeting.agendas
+      },
+    };
+  }
+
+  async updateMeeting(id: number, dto: UpdateMeetingDto) {
+    const meeting = await this.prisma.meeting.findUnique({ where: { id } });
+    if (!meeting) throw new NotFoundException('Cuộc họp không tồn tại');
+
+    // Check if meeting code already exists (if updating code)
+    if (dto.meetingCode && dto.meetingCode !== meeting.meetingCode) {
+      const existing = await this.prisma.meeting.findUnique({ 
+        where: { meetingCode: dto.meetingCode } 
+      });
+      if (existing) throw new BadRequestException('Mã cuộc họp đã tồn tại');
+    }
+
+    const updated = await this.prisma.meeting.update({ 
+      where: { id }, 
+      data: dto 
+    });
+
+    return {
+      success: true,
+      message: 'Cập nhật cuộc họp thành công',
+      data: new MeetingResponseDto(updated),
+    };
+  }
+
+  async updateMeetingStatus(id: number, status: string) {
+    const validStatuses = ['DRAFT', 'SCHEDULED', 'ONGOING', 'COMPLETED', 'CANCELLED'];
+    if (!validStatuses.includes(status)) {
+      throw new BadRequestException('Trạng thái không hợp lệ');
+    }
+
+    const meeting = await this.prisma.meeting.findUnique({ where: { id } });
+    if (!meeting) throw new NotFoundException('Cuộc họp không tồn tại');
+
+    const updated = await this.prisma.meeting.update({ 
+      where: { id }, 
+      data: { status } 
+    });
+
+    return {
+      success: true,
+      message: 'Cập nhật trạng thái cuộc họp thành công',
+      data: new MeetingResponseDto(updated),
+    };
+  }
+
+  async deleteMeeting(id: number) {
+    const meeting = await this.prisma.meeting.findUnique({ where: { id } });
+    if (!meeting) throw new NotFoundException('Cuộc họp không tồn tại');
+
+    await this.prisma.meeting.delete({ where: { id } });
+    
+    return {
+      success: true,
+      message: 'Xóa cuộc họp thành công',
+      data: null,
+    };
+  }
+
+  async getMeetingStatistics(id: number) {
+    const meeting = await this.prisma.meeting.findUnique({ 
+      where: { id },
+      include: {
+        registrations: {
+          include: {
+            shareholder: true
+          }
+        },
+        resolutions: {
+          include: {
+            votes: true,
+            candidates: true
+          }
+        },
+        attendances: true,
+        questions: true,
+        feedbacks: true
+      }
+    });
+
+    if (!meeting) throw new NotFoundException('Cuộc họp không tồn tại');
+
+    const statistics = {
+      totalRegistrations: meeting.registrations.length,
+      totalAttendances: meeting.attendances.length,
+      totalQuestions: meeting.questions.length,
+      totalFeedbacks: meeting.feedbacks.length,
+      totalResolutions: meeting.resolutions.length,
+      totalVotes: meeting.resolutions.reduce((acc, resolution) => acc + resolution.votes.length, 0),
+      attendanceRate: meeting.registrations.length > 0 
+        ? (meeting.attendances.length / meeting.registrations.length) * 100 
+        : 0
+    };
+
+    return {
+      success: true,
+      message: 'Lấy thống kê cuộc họp thành công',
+      data: statistics,
+    };
+  }
+
+  /**
+   * Tự động cập nhật trạng thái meeting dựa trên thời gian
+   * Chạy mỗi phút để kiểm tra
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async autoUpdateMeetingStatus() {
+    try {
+      const now = new Date();
+      
+      // Lấy tất cả meetings cần kiểm tra (SCHEDULED và ONGOING)
+      const meetings = await this.prisma.meeting.findMany({
+        where: {
+          status: {
+            in: ['SCHEDULED', 'ONGOING']
+          }
+        },
+        include: {
+          meetingSettings: {
+            where: {
+              key: 'MEETING_DURATION',
+              isActive: true
+            }
+          }
+        }
+      });
+
+      let updatedCount = 0;
+
+      for (const meeting of meetings) {
+        const meetingDate = new Date(meeting.meetingDate);
+        const durationSetting = meeting.meetingSettings.find(s => s.key === 'MEETING_DURATION');
+        const meetingDuration = durationSetting ? parseInt(durationSetting.value) : 0;
+
+        // Tính thời gian kết thúc (meetingDate + duration phút)
+        const meetingEndTime = new Date(meetingDate.getTime() + meetingDuration * 60 * 1000);
+
+        if (meeting.status === 'SCHEDULED' && now >= meetingDate && now < meetingEndTime) {
+          // Chuyển từ SCHEDULED -> ONGOING (đã tới giờ họp)
+          await this.prisma.meeting.update({
+            where: { id: meeting.id },
+            data: { status: 'ONGOING' }
+          });
+          updatedCount++;
+          console.log(`✅ Chuyển meeting ${meeting.meetingCode} sang ONGOING`);
+        }
+        else if (meeting.status === 'ONGOING' && now >= meetingEndTime) {
+          // Chuyển từ ONGOING -> COMPLETED (đã hết thời gian họp)
+          await this.prisma.meeting.update({
+            where: { id: meeting.id },
+            data: { status: 'COMPLETED' }
+          });
+          updatedCount++;
+          console.log(`✅ Chuyển meeting ${meeting.meetingCode} sang COMPLETED`);
+        }
+      }
+
+      if (updatedCount > 0) {
+        console.log(`🔄 Đã cập nhật ${updatedCount} meeting`);
+      }
+
+    } catch (error) {
+      console.error('❌ Lỗi khi tự động cập nhật trạng thái meeting:', error);
+    }
+  }
+
+  /**
+   * API manual để chạy cập nhật trạng thái ngay lập tức
+   */
+  async manualUpdateMeetingStatus() {
+    return await this.autoUpdateMeetingStatus();
+  }
+
+  /**
+   * Lấy thông tin meeting với tính toán trạng thái thời gian thực
+   */
+  async getMeetingWithRealTimeStatus(id: number) {
+    const meeting = await this.prisma.meeting.findUnique({ 
+      where: { id },
+      include: {
+        createdByUser: {
+          select: { id: true, name: true, email: true }
+        },
+        resolutions: true,
+        registrations: {
+          include: {
+            shareholder: true
+          }
+        },
+        documents: true,
+        agendas: true,
+        meetingSettings: {
+          where: {
+            key: 'MEETING_DURATION',
+            isActive: true
+          }
+        }
+      }
+    });
+    
+    if (!meeting) throw new NotFoundException('Cuộc họp không tồn tại');
+
+    // Tính toán trạng thái thời gian thực
+    const now = new Date();
+    const meetingDate = new Date(meeting.meetingDate);
+    const durationSetting = meeting.meetingSettings.find(s => s.key === 'MEETING_DURATION');
+    const meetingDuration = durationSetting ? parseInt(durationSetting.value) : 0;
+    const meetingEndTime = new Date(meetingDate.getTime() + meetingDuration * 60 * 1000);
+
+    const realTimeStatus = {
+      currentTime: now,
+      meetingStartTime: meetingDate,
+      meetingEndTime: meetingEndTime,
+      timeUntilStart: Math.max(0, meetingDate.getTime() - now.getTime()),
+      timeUntilEnd: Math.max(0, meetingEndTime.getTime() - now.getTime()),
+      isStarted: now >= meetingDate,
+      isEnded: now >= meetingEndTime,
+      shouldBeStatus: this.calculateShouldBeStatus(now, meetingDate, meetingEndTime, meeting.status)
+    };
+
+    return {
+      success: true,
+      message: 'Lấy thông tin cuộc họp thành công',
+      data: {
+        ...new MeetingResponseDto(meeting),
+        createdByUser: meeting.createdByUser,
+        resolutions: meeting.resolutions,
+        registrations: meeting.registrations,
+        documents: meeting.documents,
+        agendas: meeting.agendas,
+        realTimeStatus
+      },
+    };
+  }
+
+  /**
+   * Tính toán trạng thái meeting nên có dựa trên thời gian
+   */
+  private calculateShouldBeStatus(now: Date, meetingDate: Date, meetingEndTime: Date, currentStatus: string): string {
+    if (now < meetingDate) {
+      return 'SCHEDULED';
+    } else if (now >= meetingDate && now < meetingEndTime) {
+      return 'ONGOING';
+    } else if (now >= meetingEndTime) {
+      return 'COMPLETED';
+    }
+    return currentStatus;
+  }
+}

@@ -1,0 +1,898 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+}
+
+model User {
+  id                    Int                    @id @default(autoincrement())
+  name                  String
+  email                 String                 @unique
+  password              String?
+  phone                 String?
+  gender                String?
+  avatar                String?
+  isActive              Boolean                @default(true)
+  type_account          String                 @default("normal")
+  role                  String                 @default("user")
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  resetToken            String?
+  resetTokenExpiry      DateTime?
+
+
+  createdMeetings  Meeting[]         @relation("MeetingCreator")
+  reviewedFeedbacks Feedback[]       @relation("FeedbackReviewer")
+  uploadedDocuments Document[]       @relation("DocumentUploader")
+  dataImports      DataImport[]
+  generatedReports GeneratedReport[]
+  
+  roles                     UserRole[]
+  auditLogs                 AuditLog[]
+  chatConversations         ChatConversation[]
+  adminAssignedChats        ChatConversation[]       @relation("AdminAssigned")
+
+  notifications         Notification[]
+  createdMinutes        MeetingMinute[]        @relation("MinuteCreator")
+  approvedMinutes       MeetingMinute[]        @relation("MinuteApprover")
+  approvedProxies       Proxy[]                @relation("ProxyApprover")
+}
+
+model PasswordResetToken {
+  id        Int      @id @default(autoincrement())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("password_reset_tokens")
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  action     String
+  resource   String?
+  resourceId Int?
+  method     String
+  route      String
+  ip         String?
+  userAgent  String?
+  payload    Json?
+  createdAt  DateTime @default(now())
+  userId     Int?
+  user       User?    @relation(fields: [userId], references: [id])
+}
+
+model Role {
+  id              Int              @id @default(autoincrement())
+  name            String           @unique
+  description     String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  rolePermissions RolePermission[]
+  users           UserRole[]
+}
+
+model UserRole {
+  userId Int
+  roleId Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model Permission {
+  id              Int              @id @default(autoincrement())
+  name            String           @unique
+  description     String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  rolePermissions RolePermission[]
+}
+
+model RolePermission {
+  roleId       Int
+  permissionId Int
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model ChatConversation {
+  id              Int                    @id @default(autoincrement())
+  userId          Int?
+  sessionId       String?
+  assignedAdminId Int?
+  status          ChatConversationStatus @default(ACTIVE)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  user            User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  admin           User?                  @relation("AdminAssigned", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  messages        ChatMessage[]
+
+  @@index([sessionId])
+  @@index([userId])
+  @@index([assignedAdminId])
+}
+
+
+
+model ChatMessage {
+  id             Int              @id @default(autoincrement())
+  conversationId Int
+  senderId       Int?
+  senderType     SenderType
+  message        String
+  metadata       Json?
+  sessionId      String?
+  isRead         Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@index([sessionId])
+}
+
+model Config {
+  id            Int      @id @default(autoincrement())
+  name          String?
+  email         String?
+  mobile        String?
+  address       String?
+  googlemap     String?
+  facebook      String?
+  zalo          String?
+  instagram     String?
+  tiktok        String?
+  youtube       String?
+  x             String?
+  linkedin      String?
+  logo          String?
+  banner        Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  showAddress   Boolean  @default(true)
+  showEmail     Boolean  @default(true)
+  showFacebook  Boolean  @default(true)
+  showGooglemap Boolean  @default(false)
+  showInstagram Boolean  @default(false)
+  showLinkedin  Boolean  @default(false)
+  showMobile    Boolean  @default(true)
+  showTiktok    Boolean  @default(false)
+  showX         Boolean  @default(false)
+  showYoutube   Boolean  @default(false)
+  showZalo      Boolean  @default(false)
+
+  VNP_TMN_CODE  String?
+  VNP_SECRET    String?
+  VNP_API_URL   String?
+
+  EMAIL_USER    String?
+  EMAIL_PASS    String?
+  EMAIL_FROM    String?
+}
+
+
+model PromptAI {
+  id        Int            @id @default(autoincrement())
+  name      String
+  text      String
+  status    PromptAIStatus
+  position  Int
+  startDate DateTime
+  endDate   DateTime
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@index([status])
+}
+
+
+// ==================== CORE MEETING SYSTEM ====================
+
+model Meeting {
+  id                  Int       @id @default(autoincrement())
+  meetingCode         String    @unique
+  meetingName         String
+  meetingType         String
+  meetingDate         DateTime
+  meetingLocation     String?
+  meetingAddress      String?
+  description         String?
+  status              String    @default("DRAFT")
+  registrationStart   DateTime?
+  registrationEnd     DateTime?
+  votingStart         DateTime?
+  votingEnd           DateTime?
+  totalShares         Int    @default(0)
+  totalShareholders   Int       @default(0)
+  createdBy           Int
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  resolutions        Resolution[]
+  registrations      Registration[]
+  feedbacks          Feedback[]
+  questions          Question[]
+  verificationLinks  VerificationLink[]
+  documents          Document[]
+  agendas            Agenda[]
+  attendances        Attendance[]
+  liveStreams        LiveStream[]
+  generatedReports   GeneratedReport[]
+  votes              Vote[] // Added missing relation
+
+  createdByUser      User      @relation("MeetingCreator", fields: [createdBy], references: [id])
+
+  meetingSettings     MeetingSetting[]
+  notifications       Notification[]
+  meetingMinutes      MeetingMinute[]
+  proxies             Proxy[]
+  emailLogs           EmailLog[]
+
+  @@map("meetings")
+}
+
+model Resolution {
+  id                  Int      @id @default(autoincrement())
+  meetingId           Int
+  resolutionCode      String
+  resolutionNumber    Int
+  title               String
+  content             String
+  resolutionType      String
+  votingMethod        String   @default("YES_NO")
+  approvalThreshold   Float    @default(50.00)
+  maxChoices          Int      @default(1)
+  displayOrder        Int      @default(0)
+  isActive            Boolean  @default(true)
+  totalVotes          Int   @default(0)
+  yesVotes            Int   @default(0)
+  noVotes             Int   @default(0)
+  abstainVotes        Int   @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  meeting            Meeting           @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  candidates         ResolutionCandidate[]
+  options            ResolutionOption[]     
+  votes              Vote[]
+  votingResults      VotingResult[]
+
+  @@map("resolutions")
+}
+
+model ResolutionCandidate {
+  id              Int      @id @default(autoincrement())
+  resolutionId    Int
+  candidateCode   String
+  candidateName   String
+  candidateInfo   String?
+  displayOrder    Int      @default(0)
+  voteCount       Int   @default(0)
+  isElected       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  resolution      Resolution @relation(fields: [resolutionId], references: [id], onDelete: Cascade)
+  votingResults   VotingResult[]
+
+  @@map("resolution_candidates")
+}
+
+model ResolutionOption {
+  id              Int      @id @default(autoincrement())
+  resolutionId    Int
+  optionCode      String   // Ví dụ: "YES", "NO", "OPTION_A", "OPTION_B"
+  optionText      String   // Ví dụ: "Đồng ý", "Không đồng ý", "Phương án A"
+  optionValue     String   // Giá trị thực tế để gửi vote: "YES", "NO", "option_1"
+  description     String?
+  displayOrder    Int      @default(0)
+  voteCount       Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  resolution      Resolution @relation(fields: [resolutionId], references: [id], onDelete: Cascade)
+
+  @@map("resolution_options")
+}
+
+model Shareholder {
+  id              Int       @id @default(autoincrement())
+  shareholderCode String    @unique
+  fullName        String
+  idNumber        String
+  idIssueDate     DateTime?
+  idIssuePlace    String?
+  dateOfBirth     DateTime?
+  gender          String?
+  nationality     String?
+  email           String    
+  phoneNumber     String?
+  address         String?
+  taxCode         String?
+  bankAccount     String?
+  bankName        String?
+  totalShares     Int    @default(0)
+  shareType       String    @default("COMMON")
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  shareHistories  ShareholderShareHistory[]
+  registrations   Registration[]
+  feedbacks       Feedback[]
+  questions       Question[]
+  verificationLinks VerificationLink[]
+  votes           Vote[]
+  attendances     Attendance[]
+  otpVerifications OTPVerification[]
+  questionUpvotes QuestionUpvote[] 
+  votingResults   VotingResult[] 
+
+  shareholderProxies Proxy[]  @relation("ShareholderProxy")
+  proxyForProxies    Proxy[]  @relation("ProxyPerson")
+
+  notifications   Notification[]
+  emailLogs       EmailLog[]
+
+  @@map("shareholders")
+}
+
+model ShareholderShareHistory {
+  id              Int      @id @default(autoincrement())
+  shareholderId   Int
+  changeDate      DateTime
+  sharesBefore    Int
+  sharesAfter     Int
+  changeAmount    Int
+  changeType      String
+  description     String?
+  createdAt       DateTime @default(now())
+
+  shareholder     Shareholder @relation(fields: [shareholderId], references: [id], onDelete: Cascade)
+
+  @@map("shareholder_share_histories")
+}
+
+model Registration {
+  id                  Int       @id @default(autoincrement())
+  meetingId           Int
+  shareholderId       Int
+  registrationCode    String    @unique
+  registrationType    String    @default("IN_PERSON")
+  registrationDate    DateTime  @default(now())
+  status              String    @default("PENDING")
+  sharesRegistered    Int
+  checkinTime         DateTime?
+  checkinMethod       String?
+  proxyName           String?
+  proxyIdNumber       String?
+  proxyRelationship   String?
+  proxyDocumentUrl    String?
+  notes               String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  meeting            Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  shareholder        Shareholder @relation(fields: [shareholderId], references: [id], onDelete: Cascade)
+
+  @@map("registrations")
+}
+
+model Feedback {
+  id              Int       @id @default(autoincrement())
+  meetingId       Int
+  shareholderId   Int
+  feedbackCode    String
+  title           String
+  content         String
+  category        String?
+  priority        String    @default("MEDIUM")
+  status          String    @default("PENDING")
+  isPublic        Boolean   @default(false)
+  adminNotes      String?
+  reviewedBy      Int?
+  reviewedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  meeting        Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  shareholder    Shareholder @relation(fields: [shareholderId], references: [id], onDelete: Cascade)
+  reviewedByUser User?      @relation("FeedbackReviewer", fields: [reviewedBy], references: [id])
+
+  @@map("feedbacks")
+}
+
+model Question {
+  id              Int       @id @default(autoincrement())
+  meetingId       Int
+  shareholderId   Int
+  questionCode    String
+  questionText    String
+  questionType    String    @default("GENERAL")
+  priority        String    @default("MEDIUM")
+  status          String    @default("PENDING")
+  isSelected      Boolean   @default(false)
+  adminNotes      String?
+  answerText      String?
+  answeredBy      String?
+  answeredAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  meeting        Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  shareholder    Shareholder @relation(fields: [shareholderId], references: [id], onDelete: Cascade)
+  upvotes        QuestionUpvote[]
+
+  @@map("questions")
+}
+
+model QuestionUpvote {
+  id              Int      @id @default(autoincrement())
+  questionId      Int
+  shareholderId   Int
+  createdAt       DateTime @default(now())
+
+  question       Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  shareholder    Shareholder @relation(fields: [shareholderId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, shareholderId])
+  @@map("question_upvotes")
+}
+
+model VerificationLink {
+  id                  Int       @id @default(autoincrement())
+  meetingId           Int
+  shareholderId       Int
+  verificationCode    String    @unique
+  qrCodeUrl           String?
+  verificationType    String    @default("REGISTRATION")
+  verificationUrl     String?
+  expiresAt           DateTime
+  isUsed              Boolean   @default(false)
+  usedAt              DateTime?
+  usedIp              String?
+  usedDevice          String?
+  emailSent           Boolean   @default(false) 
+  emailSentAt         DateTime? 
+  createdAt           DateTime  @default(now())
+
+  meeting            Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  shareholder        Shareholder @relation(fields: [shareholderId], references: [id], onDelete: Cascade)
+  verificationLogs   VerificationLog[]
+
+  @@map("verification_links")
+}
+
+model VerificationLog {
+  id                  Int       @id @default(autoincrement())
+  verificationId      Int
+  action              String
+  ipAddress           String?
+  userAgent           String?
+  success             Boolean   @default(true)
+  errorMessage        String?
+  createdAt           DateTime  @default(now())
+
+  verificationLink    VerificationLink @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+
+  @@map("verification_logs")
+}
+
+model Vote {
+  id                  Int       @id @default(autoincrement())
+  resolutionId        Int
+  shareholderId       Int
+  meetingId           Int
+  voteValue           String
+  sharesUsed          Int
+  ipAddress           String?
+  userAgent           String?
+  createdAt           DateTime  @default(now())
+
+  resolution          Resolution @relation(fields: [resolutionId], references: [id], onDelete: Cascade)
+  shareholder         Shareholder @relation(fields: [shareholderId], references: [id], onDelete: Cascade)
+  meeting             Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@unique([resolutionId, shareholderId])
+  @@map("votes")
+}
+
+model Document {
+  id              Int       @id @default(autoincrement())
+  meetingId       Int
+  documentCode    String
+  title           String
+  description     String?
+  fileUrl         String
+  fileType        String
+  fileSize        Int
+  category        String    @default("GENERAL")
+  isPublic        Boolean   @default(false)
+  displayOrder    Int       @default(0)
+  uploadedBy      Int
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  meeting        Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  uploadedByUser User    @relation("DocumentUploader", fields: [uploadedBy], references: [id])
+
+  @@map("documents")
+}
+
+model Agenda {
+  id              Int       @id @default(autoincrement())
+  meetingId       Int
+  agendaCode      String
+  title           String
+  description     String?
+  startTime       DateTime?
+  endTime         DateTime?
+  duration        Int?
+  speaker         String?
+  presentationUrl String?
+  displayOrder    Int       @default(0)
+  status          String    @default("PENDING")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  meeting        Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@map("agendas")
+}
+
+model Attendance {
+  id              Int       @id @default(autoincrement())
+  meetingId       Int
+  shareholderId   Int
+  checkinTime     DateTime
+  checkoutTime    DateTime?
+  checkinMethod   String    @default("QR_CODE")
+  ipAddress       String?
+  userAgent       String?
+  notes           String?
+  createdAt       DateTime  @default(now())
+
+  meeting        Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  shareholder    Shareholder @relation(fields: [shareholderId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, shareholderId])
+  @@map("attendances")
+}
+
+model VotingResult {
+  id                  Int       @id @default(autoincrement())
+  resolutionId        Int
+  candidateId         Int?
+  shareholderId       Int
+  voteType            String
+  sharesUsed          Int
+  votingMethod        String    @default("ONLINE")
+  createdAt           DateTime  @default(now())
+
+  resolution          Resolution @relation(fields: [resolutionId], references: [id], onDelete: Cascade)
+  candidate           ResolutionCandidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  shareholder         Shareholder @relation(fields: [shareholderId], references: [id], onDelete: Cascade)
+
+  @@map("voting_results")
+}
+
+model DataImport {
+  id            Int       @id @default(autoincrement())
+  fileName      String
+  fileType      String
+  importType    String
+  status        String    @default("PENDING")
+  totalRecords  Int       @default(0)
+  successRecords Int      @default(0)
+  errorRecords  Int       @default(0)
+  errorFileUrl  String?
+  importedBy    Int
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  importDetails DataImportDetail[]
+  importedByUser User @relation(fields: [importedBy], references: [id])
+
+  @@map("data_imports")
+}
+
+model DataImportDetail {
+  id          Int      @id @default(autoincrement())
+  importId    Int
+  rowData     Json
+  status      String   @default("PENDING")
+  errorMessage String?
+  processedAt DateTime?
+
+  dataImport DataImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@map("data_import_details")
+}
+
+model LiveStream {
+  id              Int      @id @default(autoincrement())
+  meetingId       Int
+  streamPlatform  String
+  streamUrl       String
+  streamId        String?
+  streamKey       String?
+  status          String   @default("SCHEDULED")
+  startTime       DateTime?
+  endTime         DateTime?
+  viewerCount     Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@map("live_streams")
+}
+
+model ReportTemplate {
+  id              Int      @id @default(autoincrement())
+  templateName    String
+  templateType    String
+  templateFile    String?
+  outputFormat    String   @default("PDF")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  generatedReports GeneratedReport[] // Added missing relation
+
+  @@map("report_templates")
+}
+
+model GeneratedReport {
+  id              Int      @id @default(autoincrement())
+  meetingId       Int
+  templateId      Int
+  reportName      String
+  reportUrl       String
+  reportFormat    String
+  generatedBy     Int
+  createdAt       DateTime @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  template ReportTemplate @relation(fields: [templateId], references: [id])
+  generatedByUser User @relation(fields: [generatedBy], references: [id])
+
+  @@map("generated_reports")
+}
+
+model OTPVerification {
+  id          Int      @id @default(autoincrement())
+  shareholderId Int?
+  email       String?
+  phoneNumber String?
+  otpCode     String
+  otpType     String
+  expiresAt   DateTime
+  isUsed      Boolean  @default(false)
+  usedAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  shareholder Shareholder? @relation(fields: [shareholderId], references: [id], onDelete: Cascade)
+
+  @@map("otp_verifications")
+}
+
+
+
+model Contact {
+  id        Int           @id @default(autoincrement())
+  name      String
+  email     String
+  phone     String
+  message   String
+  status    ContactStatus @default(PENDING)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+}
+
+
+
+
+model MeetingSetting {
+  id        Int      @id @default(autoincrement())
+  meetingId Int
+  key       String
+  value     String
+  dataType  String   @default("STRING")
+  description String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  
+  @@unique([meetingId, key])
+  @@map("meeting_settings")
+}
+
+
+model Notification {
+  id          Int       @id @default(autoincrement())
+  userId      Int?
+  shareholderId Int?
+  meetingId   Int?
+  type        NotificationType
+  title       String
+  message     String
+  data        Json?
+  isRead      Boolean   @default(false)
+  isSent      Boolean   @default(false)
+  sentAt      DateTime?
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  user        User?     @relation(fields: [userId], references: [id])
+  shareholder   Shareholder? @relation(fields: [shareholderId], references: [id])
+  meeting     Meeting?  @relation(fields: [meetingId], references: [id])
+
+  @@index([userId])
+  @@index([shareholderId])
+  @@index([meetingId])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model EmailTemplate {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+  subject     String
+  content     String
+  variables   Json?
+  description String?
+  category    String    @default("SYSTEM")
+  isActive    Boolean   @default(true)
+  language    String    @default("vi")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("email_templates")
+}
+
+model EmailLog {
+  id          Int      @id @default(autoincrement())
+  to          String
+  subject     String
+  templateName String
+  messageId   String?
+  shareholderId Int?
+  meetingId   Int?
+  success     Boolean  @default(false)
+  errorMessage String?
+  createdAt   DateTime @default(now())
+
+  shareholder Shareholder? @relation(fields: [shareholderId], references: [id])
+  meeting     Meeting?     @relation(fields: [meetingId], references: [id])
+
+  @@index([shareholderId])
+  @@index([meetingId])
+  @@index([createdAt])
+  @@map("email_logs")
+}
+
+model MeetingMinute {
+  id          Int       @id @default(autoincrement())
+  meetingId   Int
+  title       String
+  content     String
+  attachments Json?
+  version     String    @default("1.0")
+  status      MinuteStatus @default(DRAFT)
+  createdBy   Int
+  approvedBy  Int?
+  approvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  meeting     Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  createdByUser User  @relation("MinuteCreator", fields: [createdBy], references: [id])
+  approvedByUser User? @relation("MinuteApprover", fields: [approvedBy], references: [id])
+
+  @@map("meeting_minutes")
+}
+
+
+model Proxy {
+  id              Int       @id @default(autoincrement())
+  meetingId       Int
+  shareholderId   Int
+  proxyPersonId   Int
+  shares          Int
+  startDate       DateTime
+  endDate         DateTime
+  status          ProxyStatus @default(PENDING)
+  reason          String?
+  documentUrl     String?
+  approvedBy      Int?
+  approvedAt      DateTime?
+  rejectedReason  String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  meeting         Meeting   @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  shareholder     Shareholder @relation("ShareholderProxy", fields: [shareholderId], references: [id], onDelete: Cascade)
+  proxyPerson     Shareholder @relation("ProxyPerson", fields: [proxyPersonId], references: [id], onDelete: Cascade)
+  approvedByUser  User?     @relation("ProxyApprover", fields: [approvedBy], references: [id])
+
+  @@unique([meetingId, shareholderId])
+  @@map("proxies")
+}
+
+// ==================== ENUMS ====================
+
+enum NotificationType {
+  REGISTRATION_APPROVED
+  REGISTRATION_REJECTED
+  VOTE_REMINDER
+  MEETING_REMINDER
+  MEETING_UPDATED
+  VOTING_RESULT
+  QUESTION_ANSWERED
+  SYSTEM_ANNOUNCEMENT
+}
+
+enum MinuteStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+enum ProxyStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REVOKED
+  EXPIRED
+}
+
+
+
+
+
+
+enum ChatConversationStatus {
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+enum ContactStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+
+enum SenderType {
+  USER
+  GUEST
+  BOT
+  ADMIN
+}
+
+
+
+enum PromptAIStatus {
+  ACTIVE
+  INACTIVE
+  DELETED
+}
