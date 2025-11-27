@@ -251,30 +251,51 @@ export class ResolutionOptionsService {
   }
 
   async getResolutionOptionStatistics(resolutionId: number) {
-    const resolution = await this.prisma.resolution.findUnique({ 
-      where: { id: resolutionId },
-      include: {
-        options: true
-      }
-    });
-    
-    if (!resolution) throw new NotFoundException('Nghị quyết không tồn tại');
+  const resolution = await this.prisma.resolution.findUnique({
+    where: { id: resolutionId },
+    include: {
+      options: {
+        orderBy: { voteCount: 'desc' }
+      },
+      votes: true
+    }
+  });
 
-    const statistics = {
-      totalOptions: resolution.options.length,
-      totalVotes: resolution.options.reduce((sum, o) => sum + o.voteCount, 0),
-      averageVotesPerOption: resolution.options.length > 0 
-        ? (resolution.options.reduce((sum, o) => sum + o.voteCount, 0) / resolution.options.length).toFixed(2)
-        : 0,
-      topOption: resolution.options.length > 0 
-        ? resolution.options.reduce((max, o) => o.voteCount > max.voteCount ? o : max, resolution.options[0])
-        : null
-    };
-
-    return {
-      success: true,
-      message: 'Lấy thống kê phương án bỏ phiếu thành công',
-      data: statistics,
-    };
+  if (!resolution) {
+    throw new NotFoundException('Resolution not found');
   }
+
+  // Tính toán statistics
+  const totalOptions = resolution.options.length;
+  const totalVotes = resolution.votes.length;
+  
+  // Tổng số lựa chọn (có thể > totalVotes vì multiple choice)
+  const totalVoteCount = resolution.options.reduce((sum, option) => sum + option.voteCount, 0);
+  
+  const topOption = resolution.options.length > 0 
+    ? resolution.options.reduce((max, option) => 
+        option.voteCount > (max?.voteCount || 0) ? option : max, resolution.options[0])
+    : null;
+
+  const averageVotesPerOption = totalOptions > 0 ? totalVoteCount / totalOptions : 0;
+
+  return {
+    success: true,
+    message: 'Lấy thống kê phương án thành công',
+    data: {
+      totalOptions,
+      totalVotes: totalVoteCount, // Tổng số lựa chọn
+      uniqueVotes: totalVotes,    // Tổng số phiếu bầu
+      averageVotesPerOption: parseFloat(averageVotesPerOption.toFixed(2)),
+      topOption: topOption ? {
+        id: topOption.id,
+        optionCode: topOption.optionCode,
+        optionText: topOption.optionText,
+        optionValue: topOption.optionValue,
+        voteCount: topOption.voteCount,
+        description: topOption.description
+      } : null
+    }
+  };
+}
 }

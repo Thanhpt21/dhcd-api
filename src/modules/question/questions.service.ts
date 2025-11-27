@@ -110,7 +110,7 @@ async createQuestion(dto: CreateQuestionDto) {
 
   return {
     success: true,
-    message: 'Tạo câu hỏi thành công',
+    message: 'Tạo câu hỏi thành công, Vui lòng đợi duyệt để hiển thị',
     data: new QuestionResponseDto(result),
   };
 }

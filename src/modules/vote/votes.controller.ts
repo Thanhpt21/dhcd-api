@@ -21,6 +21,16 @@ export class VotesController {
     return this.votesService.createBatchVotes(dtos);
   }
 
+  @Post('recalculate-candidate-votes/:resolutionId')
+  async recalculateCandidateVotes(@Param('resolutionId', ParseIntPipe) resolutionId: number) {
+    return this.votesService.recalculateCandidateVotes(resolutionId);
+  }
+
+  @Post('recalculate-option-votes/:resolutionId')
+  async recalculateOptionVotes(@Param('resolutionId', ParseIntPipe) resolutionId: number) {
+    return this.votesService.recalculateOptionVotes(resolutionId);
+  }
+
   @Get()
   async getVotes(
     @Query('page') page = 1,

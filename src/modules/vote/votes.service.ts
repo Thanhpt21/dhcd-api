@@ -231,11 +231,14 @@ private validateVote(dto: CreateVoteDto, resolution: any) {
   return result;
 }
 
-  private async updateResolutionVoteCounts(prisma: any, resolutionId: number, validatedVote: any, sharesUsed: number) {
-    const updateData: any = {
-      totalVotes: { increment: 1 }
-    };
+private async updateResolutionVoteCounts(prisma: any, resolutionId: number, validatedVote: any, sharesUsed: number) {
+  const updateData: any = {
+    totalVotes: { increment: 1 }
+  };
 
+  // ✅ Xử lý cho YES_NO - CẬP NHẬT CẢ OPTIONS
+  if (['YES', 'NO', 'ABSTAIN'].includes(validatedVote.voteValue)) {
+    // Cập nhật resolution
     if (validatedVote.voteValue === 'YES') {
       updateData.yesVotes = { increment: sharesUsed };
     } else if (validatedVote.voteValue === 'NO') {
@@ -244,11 +247,271 @@ private validateVote(dto: CreateVoteDto, resolution: any) {
       updateData.abstainVotes = { increment: sharesUsed };
     }
 
-    await prisma.resolution.update({
-      where: { id: resolutionId },
-      data: updateData
+    // ✅ QUAN TRỌNG: Cập nhật OPTION voteCount cho YES_NO
+    await prisma.resolutionOption.updateMany({
+      where: {
+        resolutionId: resolutionId,
+        optionValue: validatedVote.voteValue // Tìm option theo optionValue (YES, NO, ABSTAIN)
+      },
+      data: {
+        voteCount: { increment: 1 } // ✅ CỘNG 1 VOTE COUNT CHO OPTION
+      }
+    });
+
+    // ✅ Cũng cập nhật CANDIDATE voteCount cho YES_NO (nếu có)
+    await prisma.resolutionCandidate.updateMany({
+      where: {
+        resolutionId: resolutionId,
+        candidateCode: validatedVote.voteValue
+      },
+      data: {
+        voteCount: { increment: 1 }
+      }
     });
   }
+
+  // ✅ Xử lý cho MULTIPLE_CHOICE - CẬP NHẬT CẢ OPTIONS
+  else if (validatedVote.voteValue && validatedVote.voteValue.startsWith('[')) {
+    try {
+      const selectedOptionIds = JSON.parse(validatedVote.voteValue);
+      if (Array.isArray(selectedOptionIds)) {
+        
+        // ✅ Cập nhật OPTION voteCount
+        for (const optionId of selectedOptionIds) {
+          await prisma.resolutionOption.updateMany({
+            where: {
+              resolutionId: resolutionId,
+              id: parseInt(optionId)
+            },
+            data: {
+              voteCount: { increment: 1 } // ✅ CỘNG 1 CHO OPTION
+            }
+          });
+        }
+
+        // ✅ Cũng cập nhật CANDIDATE voteCount (nếu có)
+        for (const optionId of selectedOptionIds) {
+          await prisma.resolutionCandidate.updateMany({
+            where: {
+              resolutionId: resolutionId,
+              id: parseInt(optionId)
+            },
+            data: {
+              voteCount: { increment: 1 }
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error updating vote counts for MULTIPLE_CHOICE:', error);
+    }
+  }
+
+  // ✅ Xử lý cho RANKING - CHỈ CẬP NHẬT CANDIDATES (không có options)
+  else if (validatedVote.voteValue && validatedVote.voteValue.startsWith('{')) {
+    try {
+      const ranking = JSON.parse(validatedVote.voteValue);
+      if (typeof ranking === 'object' && ranking !== null) {
+        const topCandidateCode = Object.entries(ranking).find(([code, rank]) => rank === 1)?.[0];
+        
+        if (topCandidateCode) {
+          await prisma.resolutionCandidate.updateMany({
+            where: {
+              resolutionId: resolutionId,
+              candidateCode: topCandidateCode
+            },
+            data: {
+              voteCount: { increment: 1 }
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error updating candidate vote counts for RANKING:', error);
+    }
+  }
+
+  // Cập nhật resolution
+  await prisma.resolution.update({
+    where: { id: resolutionId },
+    data: updateData
+  });
+}
+async recalculateCandidateVotes(resolutionId: number) {
+  const resolution = await this.prisma.resolution.findUnique({
+    where: { id: resolutionId },
+    include: { 
+      candidates: true,
+      votes: true // Lấy tất cả votes của resolution
+    }
+  });
+
+  if (!resolution) {
+    throw new NotFoundException('Resolution not found');
+  }
+
+  // Reset all candidate voteCount to 0
+  await this.prisma.resolutionCandidate.updateMany({
+    where: { resolutionId },
+    data: { voteCount: 0 }
+  });
+
+  // Recalculate from votes
+  for (const vote of resolution.votes) {
+    // ✅ Xử lý YES_NO - cộng 1 cho candidate tương ứng
+    if (['YES', 'NO', 'ABSTAIN'].includes(vote.voteValue)) {
+      await this.prisma.resolutionCandidate.updateMany({
+        where: {
+          resolutionId: resolutionId,
+          candidateCode: vote.voteValue
+        },
+        data: {
+          voteCount: { increment: 1 }
+        }
+      });
+    }
+
+    // ✅ Xử lý RANKING - chỉ cộng 1 cho hạng 1
+    else if (vote.voteValue && vote.voteValue.startsWith('{')) {
+      try {
+        const ranking = JSON.parse(vote.voteValue);
+        if (typeof ranking === 'object' && ranking !== null) {
+          const topCandidateCode = Object.entries(ranking).find(([code, rank]) => rank === 1)?.[0];
+          
+          if (topCandidateCode) {
+            await this.prisma.resolutionCandidate.updateMany({
+              where: {
+                resolutionId: resolutionId,
+                candidateCode: topCandidateCode
+              },
+              data: {
+                voteCount: { increment: 1 }
+              }
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error processing RANKING vote:', vote.id, error);
+      }
+    }
+
+    // ✅ Xử lý MULTIPLE_CHOICE - cộng 1 cho mỗi candidate được chọn
+    else if (vote.voteValue && vote.voteValue.startsWith('[')) {
+      try {
+        const selectedOptionIds = JSON.parse(vote.voteValue);
+        if (Array.isArray(selectedOptionIds)) {
+          for (const optionId of selectedOptionIds) {
+            await this.prisma.resolutionCandidate.updateMany({
+              where: {
+                resolutionId: resolutionId,
+                id: parseInt(optionId)
+              },
+              data: {
+                voteCount: { increment: 1 }
+              }
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error processing MULTIPLE_CHOICE vote:', vote.id, error);
+      }
+    }
+  }
+
+  // ✅ Cập nhật lại tổng số votes cho resolution (nếu cần)
+  const totalCandidateVotes = await this.prisma.resolutionCandidate.aggregate({
+    where: { resolutionId },
+    _sum: { voteCount: true }
+  });
+
+  await this.prisma.resolution.update({
+    where: { id: resolutionId },
+    data: {
+      totalVotes: resolution.votes.length // Hoặc totalCandidateVotes._sum.voteCount nếu muốn
+    }
+  });
+
+  return {
+    success: true,
+    message: 'Recalculated candidate votes successfully',
+    totalVotes: resolution.votes.length,
+    candidateVotes: totalCandidateVotes._sum.voteCount || 0
+  };
+}
+
+
+async recalculateOptionVotes(resolutionId: number) {
+  const resolution = await this.prisma.resolution.findUnique({
+    where: { id: resolutionId },
+    include: { 
+      options: true,
+      votes: true
+    }
+  });
+
+  if (!resolution) {
+    throw new NotFoundException('Resolution not found');
+  }
+
+  // Reset all option voteCount to 0
+  await this.prisma.resolutionOption.updateMany({
+    where: { resolutionId },
+    data: { voteCount: 0 }
+  });
+
+  // Recalculate from votes
+  for (const vote of resolution.votes) {
+    const votingMethod = resolution.votingMethod;
+
+    // ✅ Xử lý YES_NO - cộng 1 cho option tương ứng
+    if (votingMethod === 'YES_NO' && ['YES', 'NO', 'ABSTAIN'].includes(vote.voteValue)) {
+      await this.prisma.resolutionOption.updateMany({
+        where: {
+          resolutionId: resolutionId,
+          optionValue: vote.voteValue
+        },
+        data: {
+          voteCount: { increment: 1 }
+        }
+      });
+    }
+
+    // ✅ Xử lý MULTIPLE_CHOICE - cộng 1 cho mỗi option được chọn
+    else if (votingMethod === 'MULTIPLE_CHOICE' && vote.voteValue && vote.voteValue.startsWith('[')) {
+      try {
+        const selectedOptionIds = JSON.parse(vote.voteValue);
+        if (Array.isArray(selectedOptionIds)) {
+          for (const optionId of selectedOptionIds) {
+            await this.prisma.resolutionOption.updateMany({
+              where: {
+                resolutionId: resolutionId,
+                id: parseInt(optionId)
+              },
+              data: {
+                voteCount: { increment: 1 }
+              }
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error processing MULTIPLE_CHOICE vote for options:', vote.id, error);
+      }
+    }
+    // RANKING không tính cho options
+  }
+
+  // Lấy options mới sau khi recalculate
+  const updatedOptions = await this.prisma.resolutionOption.findMany({
+    where: { resolutionId }
+  });
+
+  return {
+    success: true,
+    message: 'Recalculated option votes successfully',
+    totalVotes: resolution.votes.length,
+    options: updatedOptions
+  };
+}
 
   private async updateCandidateVoteCounts(prisma: any, validatedVote: any, sharesUsed: number) {
     for (const result of validatedVote.votingResults) {
