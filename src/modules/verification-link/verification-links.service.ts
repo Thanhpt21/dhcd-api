@@ -378,12 +378,12 @@ export class VerificationLinksService {
     };
   }
 
-   generateVerificationUrl(verificationCode: string, verificationType: string, meetingId?: number): string {
+  private generateVerificationUrl(verificationCode: string, verificationType: string, meetingId?: number): string {
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     
     if (verificationType === 'ATTENDANCE' && meetingId) {
-      // ATTENDANCE: /verify/{code}/{meetingId}
-      return `${baseUrl}/verify/${verificationCode}/${meetingId}`;
+      // 🔥 SỬA: Đúng format cho attendance: /verify/{code}/meetings/{meetingId}
+      return `${baseUrl}/verify/${verificationCode}/meetings/${meetingId}`;
     } else {
       // REGISTRATION: /verify/{code}
       return `${baseUrl}/verify/${verificationCode}`;
@@ -834,79 +834,161 @@ export class VerificationLinksService {
   /**
    * Gửi email xác thực cho một verification link cụ thể
    */
-  async sendVerificationEmail(verificationLinkId: number) {
-    const verificationLink = await this.prisma.verificationLink.findUnique({
+async sendVerificationEmail(verificationLinkId: number) {
+  const verificationLink = await this.prisma.verificationLink.findUnique({
+    where: { id: verificationLinkId },
+    include: {
+      meeting: true,
+      shareholder: true
+    }
+  });
+
+  if (!verificationLink) {
+    throw new NotFoundException('Link xác thực không tồn tại');
+  }
+
+
+  if (!verificationLink.shareholder.email) {
+    throw new BadRequestException('Cổ đông không có địa chỉ email');
+  }
+
+  try {
+    // 🔥 SỬA: Gọi hàm mới với đầy đủ thông tin
+    const result = await this.emailService.sendEmail({
+      to: verificationLink.shareholder.email,
+      templateName: verificationLink.verificationType === 'ATTENDANCE' 
+        ? 'attendance_verification' 
+        : 'registration_confirmation',
+      variables: {
+        fullName: verificationLink.shareholder.fullName,
+        verificationUrl: verificationLink.verificationUrl, // 🔥 QUAN TRỌNG: Dùng URL từ database
+        qrCodeUrl: verificationLink.qrCodeUrl,
+        meetingName: verificationLink.meeting.meetingName,
+        meetingTime: verificationLink.meeting.meetingDate?.toLocaleString('vi-VN'),
+        meetingLocation: verificationLink.meeting.meetingLocation || 'Trụ sở chính',
+        expiresAt: verificationLink.expiresAt?.toLocaleString('vi-VN')
+      },
+      shareholderId: verificationLink.shareholderId,
+      meetingId: verificationLink.meetingId
+    });
+
+    // Update email sent status
+    await this.prisma.verificationLink.update({
       where: { id: verificationLinkId },
+      data: {
+        emailSent: true,
+        emailSentAt: new Date()
+      }
+    });
+
+    // Log hành động gửi email
+    await this.prisma.verificationLog.create({
+      data: {
+        verificationId: verificationLink.id,
+        action: 'EMAIL_SENT',
+        success: true
+      }
+    });
+
+    return {
+      success: true,
+      message: 'Gửi email xác thực thành công',
+      data: result
+    };
+  } catch (error) {
+    // Log lỗi
+    await this.prisma.verificationLog.create({
+      data: {
+        verificationId: verificationLink.id,
+        action: 'EMAIL_SEND_FAILED',
+        success: false,
+        errorMessage: error.message
+      }
+    });
+
+    throw new BadRequestException(`Gửi email thất bại: ${error.message}`);
+  }
+}
+
+  /**
+   * Gửi email xác thực hàng loạt cho nhiều verification links
+   */
+async sendBatchVerificationEmails(meetingId: number, shareholderIds: number[], verificationType: string) {
+  try {
+    // Lấy tất cả verification links
+    const verificationLinks = await this.prisma.verificationLink.findMany({
+      where: {
+        meetingId,
+        shareholderId: { in: shareholderIds },
+        verificationType
+      },
       include: {
         meeting: true,
         shareholder: true
       }
     });
 
-    if (!verificationLink) {
-      throw new NotFoundException('Link xác thực không tồn tại');
+    if (verificationLinks.length === 0) {
+      throw new BadRequestException('Không tìm thấy verification links phù hợp');
     }
 
-    if (!verificationLink.shareholder.email) {
-      throw new BadRequestException('Cổ đông không có địa chỉ email');
-    }
+    const results = {
+      total: verificationLinks.length,
+      success: 0,
+      errors: [] as string[]
+    };
 
-    try {
-      const result = await this.emailService.sendVerificationEmail(
-        verificationLink.shareholderId,
-        verificationLink.verificationCode,
-        verificationLink.meetingId
-      );
-
-      // Log hành động gửi email
-      await this.prisma.verificationLog.create({
-        data: {
-          verificationId: verificationLink.id,
-          action: 'EMAIL_SENT',
-          success: true
+    // Gửi email cho từng link
+    for (const link of verificationLinks) {
+      try {
+        if (!link.shareholder.email) {
+          results.errors.push(`Cổ đông ${link.shareholder.fullName} không có email`);
+          continue;
         }
-      });
 
-      return {
-        success: true,
-        message: 'Gửi email xác thực thành công',
-        data: result
-      };
-    } catch (error) {
-      // Log lỗi
-      await this.prisma.verificationLog.create({
-        data: {
-          verificationId: verificationLink.id,
-          action: 'EMAIL_SEND_FAILED',
-          success: false,
-          errorMessage: error.message
-        }
-      });
+        // 🔥 SỬA: Gửi email với verificationUrl từ database
+        await this.emailService.sendEmail({
+          to: link.shareholder.email,
+          templateName: verificationType === 'ATTENDANCE' 
+            ? 'attendance_verification' 
+            : 'registration_confirmation',
+          variables: {
+            fullName: link.shareholder.fullName,
+            verificationUrl: link.verificationUrl, // 🔥 QUAN TRỌNG: Dùng URL từ database
+            qrCodeUrl: link.qrCodeUrl,
+            meetingName: link.meeting.meetingName,
+            meetingTime: link.meeting.meetingDate?.toLocaleString('vi-VN'),
+            meetingLocation: link.meeting.meetingLocation || 'Trụ sở chính',
+            expiresAt: link.expiresAt?.toLocaleString('vi-VN')
+          },
+          shareholderId: link.shareholderId,
+          meetingId: link.meetingId
+        });
 
-      throw new BadRequestException(`Gửi email thất bại: ${error.message}`);
+        // Update email sent status
+        await this.prisma.verificationLink.update({
+          where: { id: link.id },
+          data: {
+            emailSent: true,
+            emailSentAt: new Date()
+          }
+        });
+
+        results.success++;
+      } catch (error) {
+        results.errors.push(`Cổ đông ${link.shareholder.fullName}: ${error.message}`);
+      }
     }
-  }
 
-  /**
-   * Gửi email xác thực hàng loạt cho nhiều verification links
-   */
-  async sendBatchVerificationEmails(meetingId: number, shareholderIds: number[], verificationType: string) {
-    try {
-      const result = await this.emailService.sendBatchVerificationEmails(
-        meetingId,
-        shareholderIds,
-        verificationType
-      );
-
-      return {
-        success: true,
-        message: result.message,
-        data: result.data
-      };
-    } catch (error) {
-      throw new BadRequestException(`Gửi email xác thực hàng loạt thất bại: ${error.message}`);
-    }
+    return {
+      success: true,
+      message: `Gửi email thành công: ${results.success}/${results.total}`,
+      data: results
+    };
+  } catch (error) {
+    throw new BadRequestException(`Gửi email xác thực hàng loạt thất bại: ${error.message}`);
   }
+}
 
   /**
    * Gửi lại email xác thực cho một verification link
