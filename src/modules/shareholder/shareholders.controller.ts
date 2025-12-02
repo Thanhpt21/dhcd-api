@@ -44,6 +44,25 @@ export class ShareholdersController {
     }
     }
 
+      @Get('export/template')
+    async exportShareholdersTemplate(@Res() res: any) {
+    try {
+        const result = await this.shareholdersService.exportTemplate();
+        
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=${result.data.fileName}`);
+        
+        const buffer = Buffer.from(result.data.buffer, 'base64');
+        return res.send(buffer);
+    } catch (error) {
+        return res.status(500).json({
+        success: false,
+        message: 'Lỗi khi export danh sách cổ đông',
+        error: error.message
+        });
+    }
+    }
+
   @Get()
   async getShareholders(
     @Query('page') page = 1,
@@ -91,4 +110,6 @@ export class ShareholdersController {
   async getShareholderStatistics(@Param('id', ParseIntPipe) id: number) {
     return this.shareholdersService.getShareholderStatistics(id);
   }
+
+  
 }
