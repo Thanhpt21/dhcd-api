@@ -11,8 +11,6 @@ import { RolePermissionsModule } from './modules/role-permission/role-permission
 import { AuditLogModule } from './modules/audit-log/audit-log.module';
 import { ConfigsModule } from './modules/config/config.module';
 import { ContactModule } from './modules/contact/contact.module';
-import { ChatModule } from './modules/chat/chat.module';
-import { RedisModule } from './core/redis/redis.module';
 import { PromptAIModule } from './modules/promtpAI/promptAI.module';
 import { UserRoleModule } from './modules/user-role/user-role.module';
 import { MeetingsModule } from './modules/meeting/meetings.module';
@@ -37,6 +35,7 @@ import { EmailModule } from './modules/email/email.module';
 import { CheckoutModule } from './modules/checkout/checkout.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ResolutionOptionsModule } from './modules/resolution-options/resolution-options.module';
+import { PrintModule } from './modules/print/print.module';
 
 
 @Module({
@@ -55,8 +54,6 @@ import { ResolutionOptionsModule } from './modules/resolution-options/resolution
     AuditLogModule,
     ConfigsModule,
     ContactModule,
-    ChatModule,
-    RedisModule,
     PromptAIModule,
     UserRoleModule,
     MeetingsModule,
@@ -79,7 +76,8 @@ import { ResolutionOptionsModule } from './modules/resolution-options/resolution
     ProxiesModule,
     EmailModule,
     CheckoutModule,
-    ResolutionOptionsModule
+    ResolutionOptionsModule,
+    PrintModule
   ],
   controllers: [AppController],
   providers: [AppService],

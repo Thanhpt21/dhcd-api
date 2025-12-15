@@ -5,6 +5,8 @@ import { UpdateMeetingDto } from './dto/update-meeting.dto';
 import { MeetingResponseDto } from './dto/meeting-response.dto';
 import { Prisma } from '@prisma/client';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import * as XLSX from 'xlsx';
+
 
 @Injectable()
 export class MeetingsService {
@@ -26,6 +28,7 @@ export class MeetingsService {
         ...dto,
         totalShares: dto.totalShares || 0,
         totalShareholders: dto.totalShareholders || 0,
+        participantCount: dto.participantCount || 0,
         status: dto.status || 'DRAFT'
       }
     });
@@ -251,6 +254,206 @@ export class MeetingsService {
     };
   }
 
+  async getAllMeetingShareholders(
+  meetingId: number,
+  search = '',
+  status = '',
+  registrationType = ''
+) {
+  // Kiểm tra meeting tồn tại
+  const meeting = await this.prisma.meeting.findUnique({
+    where: { id: meetingId },
+    select: {
+      id: true,
+      meetingCode: true,
+      meetingName: true,
+      meetingDate: true,
+      meetingLocation: true,
+      meetingAddress: true,
+      status: true,
+      totalShares: true,
+      totalShareholders: true
+    }
+  });
+
+  if (!meeting) {
+    throw new NotFoundException('Cuộc họp không tồn tại');
+  }
+
+  const where: Prisma.RegistrationWhereInput = {
+    meetingId: meetingId
+  };
+
+  // Tìm kiếm
+  if (search) {
+    where.OR = [
+      { registrationCode: { contains: search, mode: 'insensitive' } },
+      {
+        shareholder: {
+          OR: [
+            { shareholderCode: { contains: search, mode: 'insensitive' } },
+            { fullName: { contains: search, mode: 'insensitive' } },
+            { idNumber: { contains: search, mode: 'insensitive' } },
+            { email: { contains: search, mode: 'insensitive' } },
+          ]
+        }
+      }
+    ];
+  }
+
+  // Lọc theo trạng thái
+  if (status) {
+    where.status = status;
+  }
+
+  // Lọc theo hình thức
+  if (registrationType) {
+    where.registrationType = registrationType;
+  }
+
+  // Lấy tất cả registration kèm thông tin shareholder
+  const registrations = await this.prisma.registration.findMany({
+    where,
+    orderBy: [{ shareholder: { fullName: 'asc' } }, { registrationDate: 'desc' }],
+    include: {
+      shareholder: {
+        select: {
+          id: true,
+          shareholderCode: true,
+          fullName: true,
+          idNumber: true,
+          email: true,
+          phoneNumber: true,
+          address: true,
+          totalShares: true,
+          shareType: true,
+          dateOfBirth: true,
+          gender: true,
+          nationality: true,
+          bankAccount: true,
+          bankName: true,
+          taxCode: true,
+          isActive: true,
+          idIssueDate: true,
+          idIssuePlace: true
+        }
+      }
+    }
+  });
+
+  // Format dữ liệu để đảm bảo JSON serializable
+  const formatDate = (date: Date | null): string | null => {
+    return date ? date.toISOString() : null;
+  };
+
+  // Tính thống kê
+  const totalSharesRegistered = registrations.reduce((sum, reg) => sum + (reg.sharesRegistered || 0), 0);
+  const checkedInCount = registrations.filter(reg => reg.checkinTime).length;
+
+  // Format dữ liệu trả về
+  const shareholders = registrations.map(registration => ({
+    // Thông tin đăng ký
+    registrationId: registration.id,
+    registrationCode: registration.registrationCode,
+    registrationDate: formatDate(registration.registrationDate),
+    registrationType: registration.registrationType,
+    registrationStatus: registration.status,
+    sharesRegistered: registration.sharesRegistered,
+    checkinTime: formatDate(registration.checkinTime),
+    checkinMethod: registration.checkinMethod,
+    notes: registration.notes,
+    hasCheckedIn: !!registration.checkinTime,
+
+    // Thông tin ủy quyền
+    proxyName: registration.proxyName,
+    proxyIdNumber: registration.proxyIdNumber,
+    proxyRelationship: registration.proxyRelationship,
+    proxyDocumentUrl: registration.proxyDocumentUrl,
+
+    // Thông tin cổ đông
+    shareholder: registration.shareholder ? {
+      id: registration.shareholder.id,
+      shareholderCode: registration.shareholder.shareholderCode,
+      fullName: registration.shareholder.fullName,
+      idNumber: registration.shareholder.idNumber,
+      email: registration.shareholder.email,
+      phoneNumber: registration.shareholder.phoneNumber,
+      address: registration.shareholder.address,
+      totalShares: registration.shareholder.totalShares,
+      shareType: registration.shareholder.shareType,
+      isActive: registration.shareholder.isActive,
+      dateOfBirth: formatDate(registration.shareholder.dateOfBirth),
+      gender: registration.shareholder.gender,
+      nationality: registration.shareholder.nationality,
+      bankAccount: registration.shareholder.bankAccount,
+      bankName: registration.shareholder.bankName,
+      taxCode: registration.shareholder.taxCode,
+      idIssueDate: formatDate(registration.shareholder.idIssueDate),
+      idIssuePlace: registration.shareholder.idIssuePlace
+    } : null
+  }));
+
+  // Thống kê
+  const statistics = {
+    totalRegistrations: registrations.length,
+    totalSharesRegistered: totalSharesRegistered,
+    percentageOfTotalShares: meeting.totalShares > 0
+      ? parseFloat(((totalSharesRegistered / meeting.totalShares) * 100).toFixed(2))
+      : 0,
+    checkedInCount: checkedInCount,
+    checkinRate: registrations.length > 0
+      ? parseFloat(((checkedInCount / registrations.length) * 100).toFixed(2))
+      : 0,
+
+    // Phân bổ theo hình thức tham dự
+    byRegistrationType: (() => {
+      const result: Record<string, number> = {};
+      registrations.forEach(reg => {
+        const type = reg.registrationType || 'IN_PERSON';
+        result[type] = (result[type] || 0) + 1;
+      });
+      return result;
+    })(),
+
+    // Phân bổ theo trạng thái
+    byStatus: (() => {
+      const result: Record<string, number> = {};
+      registrations.forEach(reg => {
+        const status = reg.status || 'PENDING';
+        result[status] = (result[status] || 0) + 1;
+      });
+      return result;
+    })()
+  };
+
+  return {
+    success: true,
+    message: 'Lấy tất cả cổ đông của cuộc họp thành công',
+    data: {
+      meeting: {
+        id: meeting.id,
+        meetingCode: meeting.meetingCode,
+        meetingName: meeting.meetingName,
+        meetingDate: formatDate(meeting.meetingDate),
+        meetingLocation: meeting.meetingLocation,
+        meetingAddress: meeting.meetingAddress,
+        status: meeting.status,
+        totalShares: meeting.totalShares,
+        totalShareholders: meeting.totalShareholders
+      },
+      shareholders,
+      statistics,
+      total: registrations.length,
+      pagination: {
+        total: registrations.length,
+        page: 1,
+        limit: registrations.length,
+        totalPages: 1
+      }
+    },
+  };
+}
+
   /**
    * Tự động cập nhật trạng thái meeting dựa trên thời gian
    * Chạy mỗi phút để kiểm tra
@@ -398,4 +601,6 @@ export class MeetingsService {
     }
     return currentStatus;
   }
+
+
 }

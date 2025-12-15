@@ -16,6 +16,7 @@ export class MeetingResponseDto {
   votingEnd?: Date;
   totalShares: number;
   totalShareholders: number;
+  participantCount: number;
   createdBy: number;
   createdAt: Date;
   updatedAt: Date;
@@ -36,6 +37,7 @@ export class MeetingResponseDto {
     this.votingEnd = meeting.votingEnd ?? undefined;
     this.totalShares = meeting.totalShares;
     this.totalShareholders = meeting.totalShareholders;
+    this.participantCount = meeting.participantCount; 
     this.createdBy = meeting.createdBy;
     this.createdAt = meeting.createdAt;
     this.updatedAt = meeting.updatedAt;

@@ -63,4 +63,8 @@ export class UpdateMeetingDto {
   @IsOptional()
   @IsInt()
   totalShareholders?: number;
+
+  @IsOptional()
+  @IsInt()
+  participantCount?: number;
 }

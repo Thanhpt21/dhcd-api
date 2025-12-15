@@ -1,4 +1,8 @@
-import { Controller, Get, Post, Body, Param, Delete, Put, Query, ParseIntPipe, UseGuards, Patch } from '@nestjs/common';
+import { 
+  Controller, Get, Post, Body, Param, Delete, Put, Query, 
+  ParseIntPipe, UseGuards, Patch, UseInterceptors, UploadedFile, 
+  Res, Response 
+} from '@nestjs/common';
 import { MeetingsService } from './meetings.service';
 import { CreateMeetingDto } from './dto/create-meeting.dto';
 import { UpdateMeetingDto } from './dto/update-meeting.dto';
@@ -8,6 +12,23 @@ import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 @UseGuards(JwtAuthGuard)
 export class MeetingsController {
   constructor(private readonly meetingsService: MeetingsService) {}
+
+  
+  @Get(':id/shareholder/all')
+  async getAllMeetingShareholders(
+    @Param('id') id: string,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('registrationType') registrationType?: string
+  ) {
+    return this.meetingsService.getAllMeetingShareholders(
+      +id, 
+      search || '', 
+      status || '',
+      registrationType || ''
+    );
+  }
+
 
   @Post()
   async createMeeting(@Body() dto: CreateMeetingDto) {
@@ -23,6 +44,7 @@ export class MeetingsController {
     };
   }
 
+
   @Get(':id/real-time-status')
   async getMeetingWithRealTimeStatus(@Param('id', ParseIntPipe) id: number) {
     return await this.meetingsService.getMeetingWithRealTimeStatus(id);
@@ -37,6 +59,7 @@ export class MeetingsController {
   ) {
     return this.meetingsService.getMeetings(+page, +limit, search, status);
   }
+
 
   @Get('all/list')
   async getAllMeetings(@Query('search') search = '', @Query('status') status = '') {
@@ -70,4 +93,5 @@ export class MeetingsController {
   async getMeetingStatistics(@Param('id', ParseIntPipe) id: number) {
     return this.meetingsService.getMeetingStatistics(id);
   }
+
 }

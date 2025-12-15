@@ -60,6 +60,10 @@ export class CreateMeetingDto {
   @IsInt()
   totalShareholders?: number;
 
+  @IsOptional()
+  @IsInt()
+  participantCount?: number;
+
   @IsInt()
   createdBy: number;
 }
