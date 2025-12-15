@@ -15,7 +15,8 @@ COPY prisma ./prisma/
 RUN npm install --only=production
 RUN npx prisma generate
 COPY --from=build /app/dist ./dist
-
+# ⭐ QUAN TRỌNG: Copy thư mục assets từ stage build
+COPY --from=build /app/src/assets ./src/assets
 
 ENV PORT=8082
 ENV NODE_ENV=production
@@ -23,5 +24,3 @@ ENV NODE_ENV=production
 EXPOSE 8082
 
 CMD ["node", "dist/src/main.js"]
-
-
