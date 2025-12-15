@@ -1,3 +1,4 @@
+// src/documents/documents.service.ts
 import { Injectable, NotFoundException, BadRequestException, StreamableFile } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
@@ -13,103 +14,142 @@ import { UploadService } from '../upload/upload.service';
 export class DocumentsService {
   constructor(private prisma: PrismaService, private uploadService: UploadService) {}
 
-
   private convertFormData<T>(dto: any): T {
-  const result: any = {};
-  
-  for (const key in dto) {
-    if (dto[key] !== undefined && dto[key] !== null) {
-      const value = dto[key];
-      
-      if (typeof value === 'string') {
-        // Convert string to appropriate type
-        if (value === 'true') result[key] = true;
-        else if (value === 'false') result[key] = false;
-        else if (!isNaN(Number(value)) && value.trim() !== '') result[key] = Number(value);
-        else result[key] = value;
-      } else {
-        result[key] = value;
+    const result: any = {};
+    
+    for (const key in dto) {
+      if (dto[key] !== undefined && dto[key] !== null) {
+        const value = dto[key];
+        
+        if (typeof value === 'string') {
+          // KHÔNG convert các trường text sang number
+          // Danh sách các trường text cần giữ nguyên là string
+          const textFields = ['description', 'title', 'documentCode', 'fileUrl', 'category'];
+          
+          if (textFields.includes(key)) {
+            result[key] = value; // Giữ nguyên string
+          } else if (value === 'true') {
+            result[key] = true;
+          } else if (value === 'false') {
+            result[key] = false;
+          } else if (!isNaN(Number(value)) && value.trim() !== '') {
+            // Chỉ convert các trường numeric
+            const numericFields = [
+              'meetingId', 'fileSize', 'displayOrder', 'uploadedBy',
+              'id', 'page', 'limit', 'userId'
+            ];
+            
+            if (numericFields.includes(key)) {
+              result[key] = Number(value);
+            } else {
+              result[key] = value; // Giữ nguyên string
+            }
+          } else {
+            result[key] = value;
+          }
+        } else {
+          result[key] = value;
+        }
       }
     }
-  }
-  
-  return result as T;
-}
-
-async createDocument(
-  dto: CreateDocumentDto, 
-  file?: Express.Multer.File,
-  userId?: number
-) {
-  // SỬ DỤNG convertFormData để convert tất cả field
-  const convertedDto = this.convertFormData<CreateDocumentDto>(dto);
-  
-  const meetingId = Number(convertedDto.meetingId);
-  
-  // Check if meeting exists
-  const meeting = await this.prisma.meeting.findUnique({ 
-    where: { id: meetingId } 
-  });
-  if (!meeting) throw new BadRequestException('Cuộc họp không tồn tại');
-
-  // Check if uploader exists
-  const uploader = await this.prisma.user.findUnique({ 
-    where: { id: userId } 
-  });
-  if (!uploader) throw new BadRequestException('Người upload không tồn tại');
-
-  // Check if document code already exists
-  const existingCode = await this.prisma.document.findFirst({ 
-    where: { documentCode: convertedDto.documentCode } 
-  });
-  if (existingCode) throw new BadRequestException('Mã tài liệu đã tồn tại');
-
-  // Xử lý upload file nếu có
-  let fileUrl: string | undefined;
-  let fileType: string | undefined;
-  let fileSize: number | undefined;
-
-  if (file) {
-    // Upload file lên Supabase
-    const uploadResult = await this.uploadService.uploadDocument(
-      file,
-      'meeting-documents',
-      `doc_${Date.now()}_${file.originalname}`
-    );
     
-    if (uploadResult.success && uploadResult.url) {
-      fileUrl = uploadResult.url;
-      fileType = file.mimetype;
-      fileSize = file.size;
-    } else {
-      throw new BadRequestException(`Upload file thất bại: ${uploadResult.error}`);
-    }
-  } else {
-    throw new BadRequestException('File tài liệu là bắt buộc');
+    return result as T;
   }
 
-  const document = await this.prisma.document.create({ 
-    data: {
-      meetingId: meetingId,
-      documentCode: convertedDto.documentCode,
-      title: convertedDto.title,
-      description: convertedDto.description,
-      fileUrl: fileUrl!,
-      fileType: fileType!,
-      fileSize: fileSize!,
-      category: convertedDto.category || 'OTHER',
-      isPublic: convertedDto.isPublic || false,
-      displayOrder: convertedDto.displayOrder || 0,
-      uploadedBy: userId!
-    }
-  });
+  async createDocument(
+    dto: CreateDocumentDto, 
+    file?: Express.Multer.File,
+    userId?: number
+  ) {
+    // SỬA: Dùng convertFormData thay vì gọi đệ quy
+    const convertedDto = this.convertFormData<CreateDocumentDto>(dto);
+    
+    
+    const meetingId = Number(convertedDto.meetingId);
+    
+    // Check if meeting exists
+    const meeting = await this.prisma.meeting.findUnique({ 
+      where: { id: meetingId } 
+    });
+    if (!meeting) throw new BadRequestException('Cuộc họp không tồn tại');
 
-  return {
-    success: true,
-    message: 'Tạo tài liệu thành công',
-    data: new DocumentResponseDto(document),
-  };
-}
+    // Check if uploader exists
+    if (userId) {
+      const uploader = await this.prisma.user.findUnique({ 
+        where: { id: userId } 
+      });
+      if (!uploader) throw new BadRequestException('Người upload không tồn tại');
+    }
+
+    // Check if document code already exists
+    if (convertedDto.documentCode) {
+      const existingCode = await this.prisma.document.findFirst({ 
+        where: { documentCode: convertedDto.documentCode } 
+      });
+      if (existingCode) throw new BadRequestException('Mã tài liệu đã tồn tại');
+    }
+
+    // Xử lý upload file nếu có
+    let fileUrl: string | undefined;
+    let fileType: string | undefined;
+    let fileSize: number | undefined;
+
+    if (file) {
+      // Upload file lên Supabase
+      const uploadResult = await this.uploadService.uploadDocument(
+        file,
+        'meeting-documents',
+        `doc_${Date.now()}_${file.originalname}`
+      );
+      
+      if (uploadResult.success && uploadResult.url) {
+        fileUrl = uploadResult.url;
+        fileType = file.mimetype;
+        fileSize = file.size;
+      } else {
+        throw new BadRequestException(`Upload file thất bại: ${uploadResult.error}`);
+      }
+    } else {
+      throw new BadRequestException('File tài liệu là bắt buộc');
+    }
+
+    if (!userId) {
+      throw new BadRequestException('User ID là bắt buộc');
+    }
+
+    // ĐẢM BẢO description LUÔN LÀ STRING HOẶC NULL
+    const description = convertedDto.description !== undefined && convertedDto.description !== null
+      ? String(convertedDto.description) 
+      : null;
+
+    // ĐẢM BẢO category có giá trị hợp lệ
+    const validCategories = ['FINANCIAL_REPORT', 'RESOLUTION', 'MINUTES', 'PRESENTATION', 'GUIDE', 'OTHER'];
+    const category = convertedDto.category && validCategories.includes(convertedDto.category)
+      ? convertedDto.category
+      : 'OTHER';
+
+    const document = await this.prisma.document.create({ 
+      data: {
+        meetingId: meetingId,
+        documentCode: convertedDto.documentCode || `DOC_${Date.now()}`,
+        title: convertedDto.title || 'Untitled Document',
+        description: description, // Đã được đảm bảo là string
+        fileUrl: fileUrl!,
+        fileType: fileType!,
+        fileSize: fileSize!,
+        category: category,
+        isPublic: convertedDto.isPublic !== undefined ? Boolean(convertedDto.isPublic) : false,
+        displayOrder: convertedDto.displayOrder ? Number(convertedDto.displayOrder) : 0,
+        uploadedBy: userId
+      }
+    });
+
+    return {
+      success: true,
+      message: 'Tạo tài liệu thành công',
+      data: new DocumentResponseDto(document),
+    };
+  }
 
   async getDocuments(page = 1, limit = 10, meetingId = '', category = '', isPublic = '', search = '') {
     const skip = (page - 1) * limit;
@@ -270,7 +310,7 @@ async createDocument(
     };
   }
 
-   async downloadDocument(id: number) {
+  async downloadDocument(id: number) {
     const document = await this.prisma.document.findUnique({ 
       where: { id } 
     });
@@ -293,73 +333,73 @@ async createDocument(
       }
     };
   }
-async updateDocument(
-  id: number, 
-  dto: UpdateDocumentDto,
-  file?: Express.Multer.File
-) {
-  const document = await this.prisma.document.findUnique({ where: { id } });
-  if (!document) throw new NotFoundException('Tài liệu không tồn tại');
 
-  // Convert các field từ FormData sang đúng kiểu dữ liệu
-  const convertedDto = this.convertFormData<UpdateDocumentDto>(dto);
+  async updateDocument(
+    id: number, 
+    dto: UpdateDocumentDto,
+    file?: Express.Multer.File
+  ) {
+    const document = await this.prisma.document.findUnique({ where: { id } });
+    if (!document) throw new NotFoundException('Tài liệu không tồn tại');
 
-  // Xử lý upload file mới nếu có
-  let fileUrl: string | undefined;
-  let fileType: string | undefined;
-  let fileSize: number | undefined;
+    // Convert các field từ FormData sang đúng kiểu dữ liệu
+    const convertedDto = this.convertFormData<UpdateDocumentDto>(dto);
 
-  if (file) {
-    // Upload file mới lên Supabase
-    const uploadResult = await this.uploadService.uploadDocument(
-      file,
-      'meeting-documents',
-      `doc_${Date.now()}_${file.originalname}`
-    );
-    
-    if (uploadResult.success && uploadResult.url) {
-      fileUrl = uploadResult.url;
-      fileType = file.mimetype;
-      fileSize = file.size;
+    // Xử lý upload file mới nếu có
+    let fileUrl: string | undefined;
+    let fileType: string | undefined;
+    let fileSize: number | undefined;
+
+    if (file) {
+      // Upload file mới lên Supabase
+      const uploadResult = await this.uploadService.uploadDocument(
+        file,
+        'meeting-documents',
+        `doc_${Date.now()}_${file.originalname}`
+      );
       
-      // Xóa file cũ nếu có
-      if (document.fileUrl && document.fileUrl.includes('supabase.co')) {
-        const deleteResult = await this.uploadService.deleteFile(document.fileUrl);
-        if (!deleteResult.success) {
-          console.warn(`⚠️ Không thể xóa file cũ: ${deleteResult.error}`);
+      if (uploadResult.success && uploadResult.url) {
+        fileUrl = uploadResult.url;
+        fileType = file.mimetype;
+        fileSize = file.size;
+        
+        // Xóa file cũ nếu có
+        if (document.fileUrl && document.fileUrl.includes('supabase.co')) {
+          const deleteResult = await this.uploadService.deleteFile(document.fileUrl);
+          if (!deleteResult.success) {
+            console.warn(`⚠️ Không thể xóa file cũ: ${deleteResult.error}`);
+          }
         }
+      } else {
+        throw new BadRequestException(`Upload file thất bại: ${uploadResult.error}`);
       }
-    } else {
-      throw new BadRequestException(`Upload file thất bại: ${uploadResult.error}`);
     }
+
+    // Chỉ update các field được cung cấp
+    const updateData: any = {};
+    
+    if (convertedDto.title !== undefined) updateData.title = convertedDto.title;
+    if (convertedDto.description !== undefined) updateData.description = convertedDto.description;
+    if (convertedDto.category !== undefined) updateData.category = convertedDto.category;
+    if (convertedDto.isPublic !== undefined) updateData.isPublic = convertedDto.isPublic;
+    if (convertedDto.displayOrder !== undefined) updateData.displayOrder = convertedDto.displayOrder;
+    
+    // Update file info nếu có file mới
+    if (fileUrl) updateData.fileUrl = fileUrl;
+    if (fileType) updateData.fileType = fileType;
+    if (fileSize) updateData.fileSize = fileSize;
+
+    const updated = await this.prisma.document.update({ 
+      where: { id }, 
+      data: updateData
+    });
+
+    return {
+      success: true,
+      message: 'Cập nhật tài liệu thành công',
+      data: new DocumentResponseDto(updated),
+    };
   }
-
-  // Chỉ update các field được cung cấp
-  const updateData: any = {};
-  
-  if (convertedDto.title !== undefined) updateData.title = convertedDto.title;
-  if (convertedDto.description !== undefined) updateData.description = convertedDto.description;
-  if (convertedDto.category !== undefined) updateData.category = convertedDto.category;
-  if (convertedDto.isPublic !== undefined) updateData.isPublic = convertedDto.isPublic;
-  if (convertedDto.displayOrder !== undefined) updateData.displayOrder = convertedDto.displayOrder;
-  
-  // Update file info nếu có file mới
-  if (fileUrl) updateData.fileUrl = fileUrl;
-  if (fileType) updateData.fileType = fileType;
-  if (fileSize) updateData.fileSize = fileSize;
-
-  const updated = await this.prisma.document.update({ 
-    where: { id }, 
-    data: updateData
-  });
-
-  return {
-    success: true,
-    message: 'Cập nhật tài liệu thành công',
-    data: new DocumentResponseDto(updated),
-  };
-}
-
 
   async toggleDocumentVisibility(id: number) {
     const document = await this.prisma.document.findUnique({ where: { id } });
@@ -418,6 +458,7 @@ async updateDocument(
       data: null,
     };
   }
+
   async getMeetingDocumentStatistics(meetingId: number) {
     const meeting = await this.prisma.meeting.findUnique({ 
       where: { id: meetingId },

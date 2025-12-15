@@ -729,6 +729,12 @@ async uploadFile(
       isBase64
     });
 
+    let decodedFileName = fileName;
+    if (fileName && (fileName.includes('Ã') || fileName.includes('á»'))) {
+      decodedFileName = this.decodeFileName(fileName);
+      console.log(`🔧 [uploadFile] Decoded filename: "${fileName}" -> "${decodedFileName}"`);
+    }
+
     // 1. XỬ LÝ FILE INPUT VỚI TYPE CHECKING
     let fileBuffer: Buffer;
     let finalFileName: string;
@@ -872,7 +878,7 @@ async uploadFile(
  */
 async uploadDocument(
   file: Express.Multer.File,
-  folderPath: string = 'documents',
+  folderPath: string = 'meeting-documents', // Thay đổi mặc định thành meeting-documents
   fileName?: string
 ): Promise<UploadFileResult> {
   console.log(`📄 [uploadDocument] Uploading document...`);
@@ -897,21 +903,59 @@ async uploadDocument(
     };
   }
 
+  // Tạo tên file an toàn
+  const safeFileName = fileName 
+    ? this.sanitizeFileName(fileName)
+    : `doc_${Date.now()}_${this.sanitizeFileName(file.originalname)}`;
+
+  console.log(`🔧 [uploadDocument] Original name: "${file.originalname}" -> Safe name: "${safeFileName}"`);
+
   const result = await this.uploadFile(file, {
     folderPath,
-    fileName,
+    fileName: safeFileName, // Dùng tên file đã được sanitize
     bucketName: this.imageBucketName,
     contentType: file.mimetype
   });
 
   return result;
 }
-
 /**
  * Helper: Sanitize filename
  */
 private sanitizeFileName(fileName: string): string {
-  return fileName.replace(/[^a-zA-Z0-9-_.]/g, '_');
+  // Đầu tiên, cố gắng decode nếu là URL encoded
+  let sanitized = fileName;
+  
+  try {
+    // Thử decode URL encoding trước
+    if (fileName.includes('%')) {
+      sanitized = decodeURIComponent(fileName);
+    }
+    
+    // Loại bỏ ký tự Unicode có vấn đề
+    sanitized = sanitized.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    
+    // Thay thế ký tự không phải ASCII bằng _
+    sanitized = sanitized.replace(/[^\x00-\x7F]/g, '_');
+    
+    // Giữ nguyên dấu gạch nối, gạch dưới, dấu chấm
+    sanitized = sanitized.replace(/[^a-zA-Z0-9\-_.]/g, '_');
+    
+    // Giới hạn độ dài tên file
+    if (sanitized.length > 200) {
+      const ext = path.extname(sanitized);
+      const nameWithoutExt = path.basename(sanitized, ext);
+      sanitized = nameWithoutExt.substring(0, 150) + ext;
+    }
+    
+  } catch (error) {
+    console.warn(`⚠️ Lỗi khi sanitize filename "${fileName}":`, error.message);
+    // Fallback: chỉ giữ ký tự an toàn
+    sanitized = fileName.replace(/[^a-zA-Z0-9\-_.]/g, '_');
+  }
+  
+  console.log(`🔧 [sanitizeFileName] "${fileName}" -> "${sanitized}"`);
+  return sanitized;
 }
 
 /**
@@ -1159,6 +1203,74 @@ async fileExists(fileUrl: string, bucketName?: string): Promise<boolean> {
   } catch (error) {
     console.error('❌ [fileExists] Lỗi khi kiểm tra file:', error);
     return false;
+  }
+}
+
+/**
+ * Fix UTF-8 encoding issues
+ */
+private fixEncoding(text: string): string {
+  try {
+    // Thử decode UTF-8
+    return Buffer.from(text, 'binary').toString('utf8');
+  } catch (error) {
+    // Nếu lỗi, trả về text gốc đã được sanitize
+    return text.replace(/[^\x00-\x7F]/g, '_');
+  }
+}
+
+/**
+ * Decode filename from possible encoding issues
+ */
+private decodeFileName(fileName: string): string {
+  try {
+    // List of common encoding issues patterns
+    const patterns = [
+      { encoded: /Ã¡/g, decoded: 'á' },
+      { encoded: /Ã /g, decoded: 'à' },
+      { encoded: /á»‡/g, decoded: 'ệ' },
+      { encoded: /á»/g, decoded: 'ọ' },
+      { encoded: /Ã¢/g, decoded: 'â' },
+      { encoded: /Ãª/g, decoded: 'ê' },
+      { encoded: /Ã´/g, decoded: 'ô' },
+      { encoded: /Ã©/g, decoded: 'é' },
+      { encoded: /Ã¨/g, decoded: 'è' },
+      { encoded: /Ã³/g, decoded: 'ó' },
+      { encoded: /Ã²/g, decoded: 'ò' },
+      { encoded: /Ãº/g, decoded: 'ú' },
+      { encoded: /Ã¹/g, decoded: 'ù' },
+      { encoded: /Ã­/g, decoded: 'í' },
+      { encoded: /Ã¬/g, decoded: 'ì' },
+      { encoded: /Ã½/g, decoded: 'ý' },
+      { encoded: /á»¹/g, decoded: 'ụ' },
+      { encoded: /á»/g, decoded: 'ỏ' },
+      { encoded: /á»/g, decoded: 'ề' },
+      { encoded: /áº¡/g, decoded: 'ạ' }
+    ];
+
+    let decoded = fileName;
+    
+    // Thử decode từng pattern
+    for (const pattern of patterns) {
+      decoded = decoded.replace(pattern.encoded, pattern.decoded);
+    }
+    
+    // Nếu vẫn còn ký tự encoding lạ, thử fix bằng iconv-lite nếu có
+    if (decoded.includes('Ã') || decoded.includes('á»')) {
+      try {
+        // Cài đặt: npm install iconv-lite
+        const iconv = require('iconv-lite');
+        const buffer = Buffer.from(fileName, 'binary');
+        decoded = iconv.decode(buffer, 'utf8');
+      } catch (iconvError) {
+        console.warn('⚠️ Không thể decode với iconv:', iconvError.message);
+      }
+    }
+    
+    return decoded;
+  } catch (error) {
+    console.warn(`⚠️ Lỗi decode filename "${fileName}":`, error.message);
+    return fileName;
   }
 }
 

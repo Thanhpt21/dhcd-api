@@ -1,6 +1,16 @@
 // src/documents/dto/create-document.dto.ts
 import { IsInt, IsString, IsOptional, IsEnum, IsBoolean, IsNumber } from 'class-validator';
 
+// Định nghĩa enum riêng
+export enum DocumentCategory {
+  FINANCIAL_REPORT = 'FINANCIAL_REPORT',
+  RESOLUTION = 'RESOLUTION',
+  MINUTES = 'MINUTES',
+  PRESENTATION = 'PRESENTATION',
+  GUIDE = 'GUIDE',
+  OTHER = 'OTHER'
+}
+
 export class CreateDocumentDto {
   @IsInt()
   meetingId: number;
@@ -16,9 +26,8 @@ export class CreateDocumentDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
-  @IsEnum(['FINANCIAL_REPORT', 'RESOLUTION', 'MINUTES', 'PRESENTATION', 'GUIDE', 'OTHER'])
-  category?: string;
+  @IsEnum(DocumentCategory) // Chỉ dùng @IsEnum, không dùng @IsString
+  category?: DocumentCategory;
 
   @IsOptional()
   @IsBoolean()
@@ -27,5 +36,4 @@ export class CreateDocumentDto {
   @IsOptional()
   @IsNumber()
   displayOrder?: number;
-
 }
